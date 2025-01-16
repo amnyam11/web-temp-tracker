@@ -4,16 +4,22 @@ project(TemperatureMonitor)
 # Установите политику CMP0167 для подавления предупреждения
 cmake_policy(SET CMP0167 NEW)
 
-# Укажите путь к Boost
-set(Boost_DIR "C:/Users/zxcboi/boost_build/lib/cmake/Boost-1.87.0")
-set(Boost_ROOT "C:/Users/zxcboi/boost_build")
-set(BOOST_LIBRARYDIR "${Boost_ROOT}/lib")
+# Укажите путь к Boost через переменную окружения или параметр CMake
+if (NOT DEFINED ENV{BOOST_ROOT})
+    message(WARNING "BOOST_ROOT не установлен. Укажите путь к Boost через переменную окружения BOOST_ROOT.")
+else()
+    set(Boost_DIR "$ENV{BOOST_ROOT}/lib/cmake/Boost-1.87.0")
+    set(Boost_ROOT "$ENV{BOOST_ROOT}")
+    set(BOOST_LIBRARYDIR "${Boost_ROOT}/lib")
+endif()
 
-# Укажите путь к заголовочным файлам SQLite3
-set(SQLite3_INCLUDE_DIR "C:/msys64/ucrt64/include")
-
-# Укажите путь к библиотеке SQLite3
-set(SQLite3_LIBRARY "C:/msys64/ucrt64/lib/libsqlite3.a")
+# Укажите путь к SQLite3 через переменную окружения или параметр CMake
+if (NOT DEFINED ENV{SQLITE3_ROOT})
+    message(WARNING "SQLITE3_ROOT не установлен. Укажите путь к SQLite3 через переменную окружения SQLITE3_ROOT.")
+else()
+    set(SQLite3_INCLUDE_DIR "$ENV{SQLITE3_ROOT}/include")
+    set(SQLite3_LIBRARY "$ENV{SQLITE3_ROOT}/lib/libsqlite3.a")
+endif()
 
 # Поиск библиотеки SQLite3
 find_package(SQLite3 REQUIRED)
