@@ -21,28 +21,22 @@
 
 #include <sqlite3.h>
 
-
 using namespace std;
 
-// Глобальные переменные для работы с базой данных
 sqlite3* db;
 std::mutex db_mutex;
 
-// Глобальные переменные для хранения логов в памяти
 std::mutex log_mutex;
-std::deque<std::pair<std::string, double>> log_temp_memory;          // Основной лог температур
-std::deque<std::pair<std::string, double>> log_avg_temp_hour_memory; // Лог средних значений за час
-std::deque<std::pair<std::string, double>> log_avg_temp_day_memory;  // Лог средних значений за день
+std::deque<std::pair<std::string, double>> log_temp_memory; // Основной лог температур
 
 // Константы
-//const int MAX_TIME_DEFAULT = 24 * 60 * 60; // Максимальное время хранения записей в основном логе (24 часа)
-const int MAX_TIME_DEFAULT = 60;
+const double TIME_DELAY = 10.0;             // Таймаут для чтения данных
+const int MAX_TIME_DEFAULT = 24 * 60 * 60; // Максимальное время хранения записей в основном логе (24 часа)
 const int MAX_TIME_HOUR = 30 * 24 * 60 * 60; // Максимальное время хранения записей в логе за час (30 дней)
 const int MAX_TIME_DAY = 365 * 24 * 60 * 60; // Максимальное время хранения записей в логе за день (1 год)
-const int HOUR = 60 * 60;                   // Количество секунд в часе
-const int DAY = 24 * 60 * 60;               // Количество секунд в дне
-const double TIME_DELAY = 1.0;             // Таймаут для чтения данных
-const int SYNC_INTERVAL = 6;               // Интервал синхронизации с диском
+const int HOUR = 60 * 60 / TIME_DELAY;                   // Интервал записи 
+const int DAY = 24 * 60 * 60 / TIME_DELAY;               // Интервал записи
+const int SYNC_INTERVAL = 60 / TIME_DELAY;               // Интервал синхронизации с бд 
 
 // Функция для преобразования любого типа в строку
 template<class T>
@@ -107,7 +101,6 @@ void insertIntoTable(const std::string& table, const std::string& timestamp, dou
 void deleteOldEntries(const std::string& table, int max_age_seconds) {
     std::lock_guard<std::mutex> lock(db_mutex);
 
-    // Генерация временной метки для удаления
     time_t now = time(nullptr);
     struct tm tm;
     localtime_s(&tm, &now);
@@ -115,7 +108,6 @@ void deleteOldEntries(const std::string& table, int max_age_seconds) {
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
     std::string current_time(buffer);
 
-    // Формирование SQL-запроса
     std::string sql = "DELETE FROM " + table + " WHERE timestamp < datetime('" + current_time + "', '-" + to_string(max_age_seconds) + " seconds');";
     char* errMsg = 0;
     int rc = sqlite3_exec(db, sql.c_str(), 0, 0, &errMsg);
@@ -126,57 +118,39 @@ void deleteOldEntries(const std::string& table, int max_age_seconds) {
         std::cout << "Deleted old entries from " << table << " older than " << max_age_seconds << " seconds" << std::endl;
     }
 }
+
 // Синхронизация логов из памяти в базу данных
 void syncLogsToDatabase() {
     std::lock_guard<std::mutex> lock(log_mutex);
-
-    // Синхронизация основного лога
     for (const auto& entry : log_temp_memory) {
         insertIntoTable("temperatures", entry.first, entry.second);
     }
-    deleteOldEntries("temperatures", MAX_TIME_DEFAULT); // Удаление старых записей из temperatures
+    deleteOldEntries("temperatures", MAX_TIME_DEFAULT); 
     log_temp_memory.clear();
-
-    // Синхронизация лога средних значений за час
-    for (const auto& entry : log_avg_temp_hour_memory) {
-        insertIntoTable("avg_temp_hour", entry.first, entry.second);
-    }
-    deleteOldEntries("avg_temp_hour", MAX_TIME_HOUR); // Удаление старых записей из avg_temp_hour
-    log_avg_temp_hour_memory.clear();
-
-    // Синхронизация лога средних значений за день
-    for (const auto& entry : log_avg_temp_day_memory) {
-        insertIntoTable("avg_temp_day", entry.first, entry.second);
-    }
-    deleteOldEntries("avg_temp_day", MAX_TIME_DAY); // Удаление старых записей из avg_temp_day
-    log_avg_temp_day_memory.clear();
 }
 
-// Удаление старых записей из памяти
 
-// Вычисление среднего значения температуры за последние max_age_seconds
-double calculateAverageTemperature(const std::deque<std::pair<std::string, double>>& log_memory, int max_age_seconds) {
-    std::lock_guard<std::mutex> lock(log_mutex);
-    std::time_t now = std::time(nullptr);
-    double sum = 0.0;
-    int count = 0;
-
-    for (const auto& entry : log_memory) {
-        std::tm tm = {};
-        std::istringstream ss(entry.first);
-        ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-        if (ss.fail()) continue;
-
-        std::time_t entry_time = std::mktime(&tm);
-        if (now - entry_time < max_age_seconds) {
-            sum += entry.second;
-            count++;
-        }
+// Вычисление средней температуры
+double calculateAverageTemperature(std::string type) {
+    std::lock_guard<std::mutex> lock(db_mutex);
+    std::string hour_command = "SELECT AVG(value) FROM temperatures WHERE timestamp >= datetime('now', '-1 hour');";
+    std::string day_command = "SELECT AVG(value) FROM temperatures WHERE timestamp >= datetime('now', '-1 day');";
+    std::string sql = type == "hour" ? hour_command : day_command;
+    sqlite3_stmt* stmt;
+    int rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        std::cerr << "Failed to prepare statement: " << sqlite3_errmsg(db) << std::endl;
+        return 0.0;
     }
 
-    return (count > 0) ? (sum / count) : 0.0;
-}
+    double avg = 0.0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        avg = sqlite3_column_double(stmt, 0);
+    }
 
+    sqlite3_finalize(stmt);
+    return avg;
+}
 // Проверка на наличие нулевых байтов в строке
 bool containsNullBytes(const std::string& str) {
     return str.find('\x00') != std::string::npos;
@@ -233,27 +207,23 @@ int main(int argc, char** argv) {
 
         // Каждый час вычисляем среднее значение температуры за последний час
         if (counter_avg_hour >= HOUR) {
-            double avg_hour = calculateAverageTemperature(log_temp_memory, HOUR);
+            double avg_hour = calculateAverageTemperature("hour");
             std::string timestamp = getCurrentTime();
-            {
-                std::lock_guard<std::mutex> lock(log_mutex);
-                log_avg_temp_hour_memory.emplace_back(timestamp, avg_hour);
-            }
+            insertIntoTable("avg_temp_hour", timestamp, avg_hour); // Запись в базу данных
+            deleteOldEntries("avg_temp_hour", MAX_TIME_HOUR);
             counter_avg_hour = 0;
         }
 
         // Каждые 24 часа вычисляем среднее значение температуры за последний день
         if (counter_avg_day >= DAY) {
-            double avg_day = calculateAverageTemperature(log_temp_memory, DAY);
+            double avg_day = calculateAverageTemperature("day");
             std::string timestamp = getCurrentTime();
-            {
-                std::lock_guard<std::mutex> lock(log_mutex);
-                log_avg_temp_day_memory.emplace_back(timestamp, avg_day);
-            }
+            insertIntoTable("avg_temp_day", timestamp, avg_day); // Запись в базу данных
+            deleteOldEntries("avg_temp_day", MAX_TIME_DAY); 
             counter_avg_day = 0;
         }
 
-        // Синхронизация логов с базой данных каждую минуту
+        // Синхронизация логов с бд
         if (sync_counter >= SYNC_INTERVAL) {
             syncLogsToDatabase();
             cout << "data updated" << endl;

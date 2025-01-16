@@ -4,7 +4,7 @@
 #include <random>
 #include <ctime>
 
-const double TIME_DELAY = 1.0;
+const double TIME_DELAY = 10.0;
 
 template<class T> std::string to_string(const T& v)
 {
