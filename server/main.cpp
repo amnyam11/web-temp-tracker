@@ -50,7 +50,11 @@ std::string to_string(const T& v) {
 std::string getCurrentTime() {
     time_t now = time(nullptr);
     struct tm tm;
+    #ifdef _WIN32
     localtime_s(&tm, &now);
+    #else
+    localtime_r(&now, &tm);
+    #endif
     char buffer[80];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
     return string(buffer);
@@ -103,7 +107,11 @@ void deleteOldEntries(const std::string& table, int max_age_seconds) {
 
     time_t now = time(nullptr);
     struct tm tm;
+	#ifdef _WIN32
     localtime_s(&tm, &now);
+    #else
+    localtime_r(&now, &tm);
+    #endif
     char buffer[80];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
     std::string current_time(buffer);
